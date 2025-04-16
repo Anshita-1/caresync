@@ -1,0 +1,21 @@
+{
+  "upload_report":  "रिपोर्ट अपलोड करें",
+  "set_reminders":  "अलार्म सेट करें",
+  "chatbot":        "चैटबोट",
+  "voice_assistant":"वॉयस असिस्टेंट",
+  "profile":        "प्रोफ़ाइल",
+  "care_sync_user": "केयरसिंक उपयोगकर्ता",
+  "user_email":     "user@example.com",
+  "change_language":"भाषा बदलें",
+  "dark_mode":      "डार्क मोड",
+  "logout":         "लॉग आउट",
+  "upload":         "अपलोड",
+  "reminders":      "अलार्म",
+  "chat":           "चैट",
+  "voice":          "वॉयस",
+  "select_language":"भाषा चुनें",
+  "language_selection":"भाषा चयन",
+  "lang_en":        "अंग्रेज़ी",
+  "lang_hi":        "हिन्दी",
+  "lang_mr":        "मराठी"
+}

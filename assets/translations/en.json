@@ -1,0 +1,21 @@
+{
+  "upload_report":  "Upload Report",
+  "set_reminders":  "Set Reminders",
+  "chatbot":        "Chatbot",
+  "voice_assistant":"Voice Assistant",
+  "profile":        "Profile",
+  "care_sync_user":   "CareSync User",
+  "user_email":       "user@example.com",
+  "change_language":  "Change Language",
+  "dark_mode":        "Dark Mode",
+  "logout":           "Logout",
+  "upload":     "Upload",
+  "reminders":  "Reminders",
+  "chat":       "Chat",
+  "voice":      "Voice",
+  "select_language":    "Select Language",
+  "language_selection": "Language Selection",
+  "lang_en":            "English",
+  "lang_hi":            "Hindi",
+  "lang_mr":            "Marathi"
+}

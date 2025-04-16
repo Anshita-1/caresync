@@ -1,0 +1,21 @@
+{
+  "upload_report":  "रिपोर्ट अपलोड करा",
+  "set_reminders":  "सूचना सेट करा",
+  "chatbot":        "चॅटबोट",
+  "voice_assistant":"व्हॉइस सहाय्यक",
+  "profile":        "प्रोफाइल",
+  "care_sync_user": "केयरसिंक वापरकर्ता",
+  "user_email":     "user@example.com",
+  "change_language":"भाषा बदला",
+  "dark_mode":      "डार्क मोड",
+  "logout":         "लॉगआउट",
+  "upload":         "अपलोड",
+  "reminders":      "सूचना",
+  "chat":           "चॅट",
+  "voice":          "व्हॉइस",
+  "select_language":"भाषा निवडा",
+  "language_selection":"भाषा निवड",
+  "lang_en":        "इंग्रजी",
+  "lang_hi":        "हिंदी",
+  "lang_mr":        "मराठी"
+}
