@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as p;
+import 'package:open_file/open_file.dart';
+import 'package:intl/intl.dart';
 
 import '../services/chatgpt_service.dart';
 
@@ -22,14 +26,8 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
   bool _isListening = false;
   String _recognizedText = '';
   String _responseText = '';
-  String _language = 'en_IN';
   List<String> _history = [];
-
-  final Map<String, String> _langs = {
-    'English': 'en_IN',
-    'Hindi': 'hi_IN',
-    'Marathi': 'mr_IN',
-  };
+  List<String> _suggestions = [];
 
   @override
   void initState() {
@@ -41,88 +39,137 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
     _speech = stt.SpeechToText();
     _tts = FlutterTts();
     _prefs = await SharedPreferences.getInstance();
+    _history = _prefs.getStringList('voice_history') ?? [];
     setState(() {});
   }
 
   Future<void> _listen() async {
     if (!_isListening) {
-      bool avail = await _speech.initialize(
-        onStatus: (s) {
-          if (s == 'done') setState(() => _isListening = false);
+      // initialize() will prompt for RECORD_AUDIO permission
+      bool available = await _speech.initialize(
+        onStatus: (status) {
+          if (status == 'done') setState(() => _isListening = false);
         },
-        onError: (e) => print('Speech error: $e'),
+        onError: (err) => print('Speech error: $err'),
       );
-      if (!avail) return;
+      if (!available) {
+        setState(() => _responseText = 'Speech recognition unavailable.');
+        return;
+      }
       setState(() {
         _isListening = true;
         _recognizedText = '';
         _responseText = '';
+        _suggestions = [];
       });
-      _speech.listen(
-        onResult: (r) => setState(() => _recognizedText = r.recognizedWords),
-        localeId: _language,
-      );
+      _speech.listen(onResult: (res) {
+        setState(() => _recognizedText = res.recognizedWords);
+      });
     } else {
       await _speech.stop();
       setState(() => _isListening = false);
-      _processCommand(_recognizedText.trim());
+      await _processCommand(_recognizedText.trim());
     }
   }
 
   Future<void> _processCommand(String cmd) async {
     if (cmd.isEmpty) return;
-    // save to history
+
+    // Save to history
     _history.insert(0, cmd);
     if (_history.length > 50) _history.removeLast();
     await _prefs.setStringList('voice_history', _history);
 
-    setState(() => _responseText = 'Processing…');
+    setState(() {
+      _responseText = 'Processing…';
+      _suggestions = [];
+    });
 
-    if (cmd.toLowerCase().startsWith('where is my')) {
-      String name = cmd.substring(11).trim();
-      await _showReportPicker(name);
-    } else {
-      String? reply = await ChatGPTService.sendMessage(cmd);
-      _responseText = reply ?? 'Sorry, no response.';
-      await _tts.speak(_responseText);
-      setState(() {});
+    // If user asked about “report … from …”
+    if (RegExp(r'\breport\b.*\bfrom\b', caseSensitive: false).hasMatch(cmd)) {
+      await _handleReportByDate();
+      return;
     }
+
+    // Otherwise forward to ChatGPT
+    String? reply = await ChatGPTService.sendMessage(cmd);
+    if (reply == null || reply.toLowerCase().contains('sorry')) {
+      _responseText = 'I didn’t catch that. You could try:';
+      _suggestions = [
+        'Show my blood_test report',
+        'Give me reports from March 1, 2025',
+        'What is my last appointment?',
+      ];
+    } else {
+      _responseText = reply;
+    }
+    await _tts.speak(_responseText);
+    setState(() {});
   }
 
-  Future<void> _showReportPicker(String query) async {
+  Future<void> _handleReportByDate() async {
+    // Ask for date
+    DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now().subtract(const Duration(days: 1)),
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now(),
+    );
+    if (picked == null) {
+      setState(() => _responseText = 'Okay, canceled.');
+      return;
+    }
+
     final docs = await getApplicationDocumentsDirectory();
-    final files = docs.listSync(recursive: true).whereType<File>();
-    final matches = files
-        .where((f) => p.basename(f.path).toLowerCase().contains(query.toLowerCase()))
+    final files = docs
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((f) {
+      final m = f.lastModifiedSync();
+      return m.year == picked.year &&
+          m.month == picked.month &&
+          m.day == picked.day;
+    })
         .toList();
 
-    if (matches.isEmpty) {
-      _responseText = 'No report found named "$query".';
+    if (files.isEmpty) {
+      _responseText =
+      'No reports found from ${DateFormat.yMMMd().format(picked)}.';
       await _tts.speak(_responseText);
       setState(() {});
       return;
     }
 
+    _responseText =
+    'Found ${files.length} report(s) from ${DateFormat.yMMMd().format(picked)}.';
+    await _tts.speak(_responseText);
+    setState(() {});
+
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Found ${matches.length} report(s)'),
+        title: Text(_responseText),
         content: SizedBox(
           width: double.maxFinite,
           child: ListView.builder(
             shrinkWrap: true,
-            itemCount: matches.length,
+            itemCount: files.length,
             itemBuilder: (_, i) {
-              final file = matches[i];
-              final name = p.basename(file.path);
+              final file = files[i];
+              final name = file.path.split(Platform.pathSeparator).last;
+              final sizeKB =
+              (file.lengthSync() / 1024).toStringAsFixed(1);
               return ListTile(
+                leading: const Icon(Icons.insert_drive_file),
                 title: Text(name),
+                subtitle: Text('$sizeKB KB'),
                 trailing: PopupMenuButton<String>(
                   onSelected: (opt) => _handleFileOption(opt, file),
                   itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'preview', child: Text('Preview')),
-                    const PopupMenuItem(value: 'download', child: Text('Download')),
-                    const PopupMenuItem(value: 'share', child: Text('Share')),
+                    const PopupMenuItem(
+                        value: 'preview', child: Text('Preview')),
+                    const PopupMenuItem(
+                        value: 'download', child: Text('Download')),
                   ],
                 ),
               );
@@ -130,7 +177,10 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );
@@ -139,22 +189,23 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
   Future<void> _handleFileOption(String opt, File file) async {
     switch (opt) {
       case 'preview':
-        OpenFile.open(file.path);
+        await OpenFile.open(file.path);
         break;
       case 'download':
+      // Attempt to copy to Downloads; manifest must declare WRITE_EXTERNAL_STORAGE
         final dl = Directory('/storage/emulated/0/Download');
-        final dest = File('${dl.path}/${p.basename(file.path)}');
+        final dest = File(
+            '${dl.path}/${file.path.split(Platform.pathSeparator).last}');
         try {
           await file.copy(dest.path);
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('Saved to Downloads')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Saved to Downloads')),
+          );
         } catch (e) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text('Download failed: $e')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Download failed: $e')),
+          );
         }
-        break;
-      case 'share':
-        await Share.shareFiles([file.path], text: 'Here is your report');
         break;
     }
   }
@@ -162,6 +213,7 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(title: const Text('Voice Health Assistant')),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -183,37 +235,25 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              DropdownButton<String>(
-                value: _language,
-                dropdownColor: Colors.white,
-                iconEnabledColor: Colors.white,
-                underline: Container(height: 1, color: Colors.white70),
-                style: const TextStyle(color: Colors.white),
-                items: _langs.entries.map((e) {
-                  return DropdownMenuItem(
-                    value: e.value,
-                    child: Text(e.key, style: const TextStyle(color: Colors.black)),
-                  );
-                }).toList(),
-                onChanged: (v) => setState(() => _language = v!),
-              ),
-              const SizedBox(height: 12),
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 20),
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color.fromRGBO(255, 255, 255, 0.9),
+                  color: Colors.white70,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  _recognizedText.isEmpty ? 'Tap mic and speak…' : _recognizedText,
+                  _recognizedText.isEmpty
+                      ? 'Tap mic and speak…'
+                      : _recognizedText,
                   style: const TextStyle(fontSize: 18),
                 ),
               ),
               const SizedBox(height: 12),
               FloatingActionButton(
                 onPressed: _listen,
-                backgroundColor: _isListening ? Colors.redAccent : Colors.white,
+                backgroundColor:
+                _isListening ? Colors.redAccent : Colors.white,
                 child: Icon(
                   _isListening ? Icons.mic_off : Icons.mic,
                   color: _isListening ? Colors.white : Colors.blueAccent,
@@ -226,29 +266,48 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
                   margin: const EdgeInsets.symmetric(horizontal: 20),
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color.fromRGBO(255, 255, 255, 0.9),
+                    color: Colors.white70,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Text(
-                    _responseText,
-                    style: const TextStyle(fontSize: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_responseText,
+                          style: const TextStyle(fontSize: 16)),
+                      const SizedBox(height: 8),
+                      if (_suggestions.isNotEmpty)
+                        Wrap(
+                          spacing: 8,
+                          children:
+                          _suggestions.map((s) {
+                            return ActionChip(
+                              label: Text(s),
+                              onPressed: () => _processCommand(s),
+                            );
+                          }).toList(),
+                        ),
+                    ],
                   ),
                 ),
               const SizedBox(height: 12),
               const Divider(color: Colors.white70),
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 16),
                   decoration: const BoxDecoration(
                     color: Color.fromRGBO(255, 255, 255, 0.7),
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                    borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(24)),
                   ),
                   child: ListView.builder(
                     itemCount: _history.length,
-                    itemBuilder: (_, i) => ListTile(
-                      leading: const Icon(Icons.history),
-                      title: Text(_history[i]),
-                    ),
+                    itemBuilder: (_, i) {
+                      return ListTile(
+                        leading: const Icon(Icons.history),
+                        title: Text(_history[i]),
+                      );
+                    },
                   ),
                 ),
               ),
@@ -258,24 +317,4 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
       ),
     );
   }
-}
-
-class Share {
-  static shareFiles(List<String> list, {required String text}) {}
-}
-
-class OpenFile {
-  static void open(String path) {}
-}
-
-class Permission {
-  static var microphone;
-
-  static var storage;
-}
-
-class SharedPreferences {
-  setStringList(String s, List<String> history) {}
-
-  static getInstance() {}
 }

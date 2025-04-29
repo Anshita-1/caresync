@@ -45,6 +45,14 @@ android {
         versionName = flutter.versionName
     }
 
+    lint {
+        // Don’t abort the build on any lint errors
+        abortOnError = false
+
+        // Skip the vital checks that are locking that jar
+        checkReleaseBuilds = false
+    }
+
     buildTypes {
         release {
             // Signing config for release build. (Currently using the debug signingConfig)

@@ -1,68 +1,49 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
-import 'package:timezone/data/latest_all.dart' as tz;
-import 'package:intl/date_symbol_data_local.dart';
-
 
 class NotificationService {
-  static final NotificationService _instance = NotificationService._internal();
+  static final FlutterLocalNotificationsPlugin _notificationsPlugin =
+  FlutterLocalNotificationsPlugin();
 
-  factory NotificationService() => _instance;
-
-  late FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin;
-
-  NotificationService._internal() {
-    flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-  }
-
-  /// Call this once during app startup.
-  Future<void> initialize() async {
+  static Future<void> initialize() async {
     tz.initializeTimeZones();
 
-    const AndroidInitializationSettings initializationSettingsAndroid =
+    const AndroidInitializationSettings androidSettings =
     AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    const InitializationSettings initializationSettings = InitializationSettings(
-      android: initializationSettingsAndroid,
+    const InitializationSettings settings = InitializationSettings(
+      android: androidSettings,
     );
 
-    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+    await _notificationsPlugin.initialize(settings);
   }
 
-  /// Schedules a local notification with a unique ID.
   static Future<void> scheduleNotification({
     required int id,
     required String title,
     required String body,
     required DateTime scheduledTime,
   }) async {
-    final tz.TZDateTime tzScheduledDate = tz.TZDateTime.from(scheduledTime, tz.local);
-
-    const AndroidNotificationDetails androidNotificationDetails =
-    AndroidNotificationDetails(
-      'reminder_channel',
-      'Reminders',
-      channelDescription: 'Channel for medicine reminders',
-      importance: Importance.max,
-      priority: Priority.high,
-    );
-
-    const NotificationDetails notificationDetails =
-    NotificationDetails(android: androidNotificationDetails);
-
-    await _instance.flutterLocalNotificationsPlugin.zonedSchedule(
+    await _notificationsPlugin.zonedSchedule(
       id,
       title,
       body,
-      tzScheduledDate,
-      notificationDetails,
-      payload: '',
+      tz.TZDateTime.from(scheduledTime, tz.local),
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'medicines_channel',
+          'Medicine Reminders',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+      ),
+      matchDateTimeComponents: DateTimeComponents.time,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
     );
   }
 
-  /// Cancels a notification with the given ID.
   static Future<void> cancelNotification(int id) async {
-    await _instance.flutterLocalNotificationsPlugin.cancel(id);
+    await _notificationsPlugin.cancel(id);
   }
 }

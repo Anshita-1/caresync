@@ -2,6 +2,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:intl/intl.dart';
+import 'package:open_file/open_file.dart';
+
+/// Sorting criteria for report list
+enum SortCriterion { nameAsc, dateAsc, dateDesc, sizeAsc, sizeDesc }
+
+/// File type filter options
+enum FilterType { all, images, pdf }
 
 class UploadReportScreen extends StatefulWidget {
   const UploadReportScreen({Key? key}) : super(key: key);
@@ -17,6 +25,8 @@ class _UploadReportScreenState extends State<UploadReportScreen> {
   List<FileSystemEntity> _filteredReports = [];
   late Directory _reportsDirectory;
   bool _isUploading = false;
+  SortCriterion _currentSort = SortCriterion.nameAsc;
+  FilterType _currentFilter = FilterType.all;
 
   @override
   void initState() {
@@ -32,163 +42,197 @@ class _UploadReportScreenState extends State<UploadReportScreen> {
     super.dispose();
   }
 
-  // Initialize or create the local "reports" directory.
   Future<void> _initializeReportsDirectory() async {
     Directory appDocDir = await getApplicationDocumentsDirectory();
     _reportsDirectory = Directory('${appDocDir.path}/reports');
-    if (!(await _reportsDirectory.exists())) {
+    if (!await _reportsDirectory.exists()) {
       await _reportsDirectory.create(recursive: true);
     }
     await _refreshReportList();
   }
 
-  // Refresh the list of saved reports.
   Future<void> _refreshReportList() async {
-    final reports = _reportsDirectory.listSync();
+    final files = _reportsDirectory.listSync();
     setState(() {
-      _reports = reports;
+      _reports = files;
       _applyFiltering();
     });
   }
 
-  // Apply search filter on the list of reports.
   void _applyFiltering() {
     String query = _searchController.text.toLowerCase();
-    setState(() {
-      _filteredReports = _reports.where((file) {
-        String fileName = file.path.split(Platform.pathSeparator).last;
-        return fileName.toLowerCase().contains(query);
-      }).toList();
+    List<FileSystemEntity> temp = _reports.where((file) {
+      String name = file.path.split(Platform.pathSeparator).last.toLowerCase();
+      if (!name.contains(query)) return false;
+      if (_currentFilter == FilterType.images) {
+        return ['.png', '.jpg', '.jpeg', '.gif']
+            .any((ext) => name.endsWith(ext));
+      } else if (_currentFilter == FilterType.pdf) {
+        return name.endsWith('.pdf');
+      }
+      return true;
+    }).toList();
+
+    temp.sort((a, b) {
+      FileStat statA = a.statSync();
+      FileStat statB = b.statSync();
+      switch (_currentSort) {
+        case SortCriterion.nameAsc:
+          return a.path.compareTo(b.path);
+        case SortCriterion.dateAsc:
+          return statA.modified.compareTo(statB.modified);
+        case SortCriterion.dateDesc:
+          return statB.modified.compareTo(statA.modified);
+        case SortCriterion.sizeAsc:
+          return statA.size.compareTo(statB.size);
+        case SortCriterion.sizeDesc:
+          return statB.size.compareTo(statA.size);
+      }
     });
+
+    setState(() => _filteredReports = temp);
   }
 
-  // Handle file selection, renaming, and storing locally.
   Future<void> _uploadReport() async {
     if (_reportNameController.text.trim().isEmpty) {
-      _showCustomPopup(title: "Error", message: "Please enter a report name.");
+      _showPopup('Error', 'Please enter a report name.');
       return;
     }
     setState(() => _isUploading = true);
     FilePickerResult? result = await FilePicker.platform.pickFiles();
     if (result != null && result.files.single.path != null) {
-      String originalPath = result.files.single.path!;
-      String extension = originalPath.substring(originalPath.lastIndexOf('.'));
-      String newName = _reportNameController.text.trim() + extension;
-      File newFile = File('${_reportsDirectory.path}/$newName');
+      String orig = result.files.single.path!;
+      String ext = orig.substring(orig.lastIndexOf('.'));
+      String name = _reportNameController.text.trim() + ext;
+      File dest = File('${_reportsDirectory.path}/$name');
       try {
-        await File(originalPath).copy(newFile.path);
-        _showCustomPopup(title: "Success", message: "Report uploaded successfully.");
+        await File(orig).copy(dest.path);
+        _showPopup('Success', 'Uploaded successfully.');
         _reportNameController.clear();
         await _refreshReportList();
       } catch (e) {
-        _showCustomPopup(title: "Error", message: "Failed to upload report.\n$e");
+        _showPopup('Error', 'Upload failed: $e');
       }
     } else {
-      // User canceled file selection.
-      _showCustomPopup(title: "Cancelled", message: "No file selected.");
+      _showPopup('Cancelled', 'No file selected.');
     }
     setState(() => _isUploading = false);
   }
 
-  // Delete a report file after confirmation.
   Future<void> _deleteReport(FileSystemEntity file) async {
-    String fileName = file.path.split(Platform.pathSeparator).last;
+    String name = file.path.split(Platform.pathSeparator).last;
     try {
       await file.delete();
       await _refreshReportList();
-      _showCustomPopup(title: "Deleted", message: "$fileName has been deleted.");
+      _showPopup('Deleted', '$name removed.');
     } catch (e) {
-      _showCustomPopup(title: "Error", message: "Failed to delete report:\n$e");
+      _showPopup('Error', 'Delete failed: $e');
     }
   }
 
-  // Custom animated pop-up dialog for notifications.
-  Future<void> _showCustomPopup({required String title, required String message}) {
-    return showGeneralDialog(
+  Future<void> _renameReport(FileSystemEntity file) async {
+    String oldName = file.path.split(Platform.pathSeparator).last;
+    String base = oldName.contains('.')
+        ? oldName.substring(0, oldName.lastIndexOf('.'))
+        : oldName;
+    String ext = oldName.contains('.')
+        ? oldName.substring(oldName.lastIndexOf('.'))
+        : '';
+    TextEditingController ctrl = TextEditingController(text: base);
+    await showDialog(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: "Popup",
-      barrierColor: Colors.black.withOpacity(0.5),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return Center(
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-              width: MediaQuery.of(context).size.width * 0.8,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 20),
-                  Text(message, textAlign: TextAlign.center),
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 45),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                    child: const Text("OK"),
-                  ),
-                ],
-              ),
-            ),
+      builder: (_) => AlertDialog(
+        title: const Text('Rename'),
+        content: TextField(controller: ctrl),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              String newName = ctrl.text.trim() + ext;
+              try {
+                await File(file.path)
+                    .rename('${_reportsDirectory.path}/$newName');
+                Navigator.pop(context);
+                await _refreshReportList();
+              } catch (_) {
+                Navigator.pop(context);
+                _showPopup('Error', 'Rename failed.');
+              }
+            },
+            child: const Text('Rename'),
           ),
-        );
-      },
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        return ScaleTransition(
-          scale: CurvedAnimation(parent: animation, curve: Curves.easeOut),
-          child: child,
-        );
-      },
+        ],
+      ),
     );
   }
 
-  // Build file list tile with thumbnail preview for images.
-  Widget _buildFileTile(FileSystemEntity file) {
-    String fileName = file.path.split(Platform.pathSeparator).last;
-    bool isImage = fileName.toLowerCase().endsWith('.png') ||
-        fileName.toLowerCase().endsWith('.jpg') ||
-        fileName.toLowerCase().endsWith('.jpeg') ||
-        fileName.toLowerCase().endsWith('.gif');
+  void _showPopup(String title, String msg) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (_, __, ___) => Center(
+        child: Material(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            width: 300,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                Text(msg),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTile(FileSystemEntity file) {
+    String name = file.path.split(Platform.pathSeparator).last;
+    FileStat stat = file.statSync();
+    String date = DateFormat('yyyy-MM-dd HH:mm').format(stat.modified);
+    String size;
+    if (stat.size < 1024) {
+      size = '${stat.size} B';
+    } else if (stat.size < 1024 * 1024) {
+      size = '${(stat.size / 1024).toStringAsFixed(1)} KB';
+    } else {
+      size = '${(stat.size / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    bool isImage = ['.png', '.jpg', '.jpeg', '.gif']
+        .any((ext) => name.toLowerCase().endsWith(ext));
+
     return ListTile(
       leading: isImage
-          ? Image.file(
-        File(file.path),
-        width: 50,
-        height: 50,
-        fit: BoxFit.cover,
-      )
+          ? Image.file(File(file.path), width: 50, height: 50, fit: BoxFit.cover)
           : const Icon(Icons.insert_drive_file, size: 50),
-      title: Text(fileName),
-      trailing: IconButton(
-        icon: const Icon(Icons.delete, color: Colors.red),
-        onPressed: () => _deleteReport(file),
+      title: Text(name),
+      subtitle: Text('$date • $size'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(icon: const Icon(Icons.edit), onPressed: () => _renameReport(file)),
+          IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _deleteReport(file)),
+        ],
       ),
-      onTap: () {
-        // Optionally, implement file preview functionality here.
-      },
+      onTap: () => OpenFile.open(file.path),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Gradient background consistent with the theme.
       body: Container(
-        width: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             colors: [Color(0xFF4A90E2), Color(0xFF50E3C2)],
@@ -197,87 +241,86 @@ class _UploadReportScreenState extends State<UploadReportScreen> {
           ),
         ),
         child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Upload Form Card with refined UI.
                 Card(
-                  elevation: 8,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  margin: const EdgeInsets.only(bottom: 20),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Colors.white, Color(0xFFF2F8FF)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white70, width: 1.5),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          TextField(
-                            controller: _reportNameController,
-                            decoration: InputDecoration(
-                              labelText: "Enter the report name to upload.",
-                              prefixIcon: const Icon(Icons.note),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 4,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      children: [
+                        TextField(
+                          controller: _reportNameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Report Name',
+                            prefixIcon: Icon(Icons.note),
                           ),
-                          const SizedBox(height: 20),
-                          _isUploading
-                              ? const Center(child: CircularProgressIndicator())
-                              : ElevatedButton(
-                            onPressed: _uploadReport,
-                            style: ElevatedButton.styleFrom(
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              minimumSize: const Size(double.infinity, 50),
-                              textStyle: const TextStyle(fontSize: 18),
-                            ),
-                            child: const Text("Upload Report"),
-                          ),
-                        ],
-                      ),
+                        ),
+                        const SizedBox(height: 12),
+                        _isUploading
+                            ? const CircularProgressIndicator()
+                            : ElevatedButton(
+                          onPressed: _uploadReport,
+                          child: const Text('Upload'),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-                // Search Bar for filtering reports.
-                TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    labelText: "Search Reports",
-                    prefixIcon: const Icon(Icons.search),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: const InputDecoration(
+                          hintText: 'Search',
+                          prefixIcon: Icon(Icons.search),
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    DropdownButton<FilterType>(
+                      value: _currentFilter,
+                      items: const [
+                        DropdownMenuItem(value: FilterType.all, child: Text('All')),
+                        DropdownMenuItem(value: FilterType.images, child: Text('Images')),
+                        DropdownMenuItem(value: FilterType.pdf, child: Text('PDFs')),
+                      ],
+                      onChanged: (v) => setState(() {
+                        _currentFilter = v!;
+                        _applyFiltering();
+                      }),
+                    ),
+                    const SizedBox(width: 8),
+                    DropdownButton<SortCriterion>(
+                      value: _currentSort,
+                      items: const [
+                        DropdownMenuItem(value: SortCriterion.nameAsc, child: Text('Name ↑')),
+                        DropdownMenuItem(value: SortCriterion.dateAsc, child: Text('Date ↑')),
+                        DropdownMenuItem(value: SortCriterion.dateDesc, child: Text('Date ↓')),
+                        DropdownMenuItem(value: SortCriterion.sizeAsc, child: Text('Size ↑')),
+                        DropdownMenuItem(value: SortCriterion.sizeDesc, child: Text('Size ↓')),
+                      ],
+                      onChanged: (v) => setState(() {
+                        _currentSort = v!;
+                        _applyFiltering();
+                      }),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 20),
-                // List of uploaded reports.
-                _filteredReports.isEmpty
-                    ? const Center(
-                  child: Text(
-                    "No reports found.",
-                    style: TextStyle(color: Colors.white, fontSize: 16),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: _filteredReports.isEmpty
+                      ? const Center(child: Text('No reports found.', style: TextStyle(color: Colors.white)))
+                      : ListView.separated(
+                    itemCount: _filteredReports.length,
+                    separatorBuilder: (_, __) => Divider(color: Colors.white54),
+                    itemBuilder: (_, i) => _buildTile(_filteredReports[i]),
                   ),
-                )
-                    : ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: _filteredReports.length,
-                  separatorBuilder: (context, index) => const Divider(height: 1, color: Colors.white70),
-                  itemBuilder: (context, index) {
-                    final file = _filteredReports[index];
-                    return _buildFileTile(file);
-                  },
                 ),
               ],
             ),

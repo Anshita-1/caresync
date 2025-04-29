@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'screens/splash_screen.dart';
 import 'screens/login_screen.dart';
@@ -19,14 +20,20 @@ import 'services/notification_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  await NotificationService().initialize();
+  await NotificationService.initialize(); // Make sure this is STATIC
+  await ReminderNotificationService.init();
+  final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+
   print("Env file loading from: ${Directory.current.path}");
   await dotenv.load(fileName: "assets/.env");
+
   runApp(const MyApp());
 }
 
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
   @override
   State<MyApp> createState() => _MyAppState();
 }
@@ -76,26 +83,17 @@ class _MyAppState extends State<MyApp> {
       // ─── Routes ──────────────────────────────────────────
       initialRoute: '/',
       routes: {
-        // Splash only needs to change locale:
         '/': (ctx) => SplashScreen(setLocale: setLocale),
-
-        // Auth screens:
         '/login': (ctx) => const LoginScreen(),
         '/register': (ctx) => const RegisterScreen(),
-
-        // Home needs both locale & theme toggles:
         '/home': (ctx) => HomeScreen(
           setLocale: setLocale,
           setThemeMode: setThemeMode,
         ),
-
-        // Profile needs both as well:
         '/profile': (ctx) => ProfileScreen(
           setLocale: setLocale,
           setThemeMode: setThemeMode,
         ),
-
-        // These don’t need theme/locale callbacks:
         '/upload': (ctx) => const UploadReportScreen(),
         '/reminder': (ctx) => const ReminderScreen(),
         '/chatbot': (ctx) => const ChatbotScreen(),
